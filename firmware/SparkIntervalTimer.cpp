@@ -121,7 +121,7 @@ void Wiring_TIM7_Interrupt_Handler_override()
 // and = 1-65535 microsecond (uSec)
 // or 1-65535 0.5ms increments (hmSec)
 // ------------------------------------------------------------
-bool IntervalTimer::beginCycles(void (*isrCallback)(), intPeriod Period, bool scale, TIMid id) {
+bool IntervalTimer::beginCycles(void (*isrCallback)(), intPeriod Period, intPeriod scale, TIMid id) {
 
 	// if this interval timer is already running, stop and deallocate it
 	if (status == TIMER_SIT) {
@@ -150,12 +150,34 @@ bool IntervalTimer::beginCycles(void (*isrCallback)(), intPeriod Period, bool sc
 
 
 // ------------------------------------------------------------
+// starts a timer with a period in seconds.
+// ------------------------------------------------------------
+bool IntervalTimer::begin(void (*isrCallback)(), double Period, TIMid id)
+{
+	//convert period (seconds) to period (clocks)
+	Period = Period * (double)SYSCORECLOCK;
+	uint64_t longLongPeriodClocks = (uint64_t)Period;
+	uint32_t periodClocks = (uint32_t)longLongPeriodClocks;
+
+	//sanity check - do not start if period too big or too small
+	if(longLongPeriodClocks != periodClocks || periodClocks < 10)
+		return false;
+
+	//split periodClocks into two factors not larger than 16 bits
+	//TODO: another factor could be used to set repetition counter
+	intPeriod factor0 = (uint16_t)(periodClocks % (UINT16_MAX+1));
+	intPeriod factor1 =  (uint16_t)(periodClocks / (factor0 == 0? (UINT16_MAX+1) : factor1));
+	return beginWithScale(isrCallback, factor1, factor0, id);
+}
+
+
+// ------------------------------------------------------------
 // enables the SIT clock if not already enabled, then checks to
 // see if any SITs are available for use. if one is available,
 // it's initialized and started with the specified value, and
 // the function returns true, otherwise it returns false
 // ------------------------------------------------------------
-bool IntervalTimer::allocate_SIT(intPeriod Period, bool scale, TIMid id) {
+bool IntervalTimer::allocate_SIT(intPeriod Period, intPeriod scale, TIMid id) {
 
 	if (id < NUM_SIT) {		// Allocate specified timer (id=TIMER3/4/5) or auto-allocate from pool (id=AUTO)
 		if (!SIT_used[id]) {
@@ -187,11 +209,10 @@ bool IntervalTimer::allocate_SIT(intPeriod Period, bool scale, TIMid id) {
 // configuters a SIT's TIMER registers, etc and enables
 // interrupts, effectively starting the timer upon completion
 // ------------------------------------------------------------
-void IntervalTimer::start_SIT(intPeriod Period, bool scale) {
+void IntervalTimer::start_SIT(intPeriod Period, intPeriod scale) {
 
 	TIM_TimeBaseInitTypeDef timerInitStructure;
     NVIC_InitTypeDef nvicStructure;
-	intPeriod prescaler;
 	TIM_TypeDef* TIMx;
 
 	//use SIT_id to identify TIM#
@@ -241,31 +262,18 @@ void IntervalTimer::start_SIT(intPeriod Period, bool scale) {
 #endif
 	}
 	
-	// Initialize Timer
-	switch (scale) {
-		case uSec:
-			prescaler = SIT_PRESCALERu;	// Set prescaler for 1MHz clock, 1us period
-			break;
-		case hmSec:
-			prescaler = SIT_PRESCALERm;	// Set prescaler for 2Hz clock, .5ms period
-			break;
-		default:
-			prescaler = SIT_PRESCALERu;
-			scale = uSec;				// Default to microseconds
-			break;
-	}
 
 	// point to the correct SIT ISR
 	SIT_CALLBACK[SIT_id] = myISRcallback;
 
 	// Enable Timer Interrupt
-    	nvicStructure.NVIC_IRQChannelPreemptionPriority = 10;
-    	nvicStructure.NVIC_IRQChannelSubPriority = 1;
+    	nvicStructure.NVIC_IRQChannelPreemptionPriority = _preemptionPriority;
+    	nvicStructure.NVIC_IRQChannelSubPriority = _subpriority;
     	nvicStructure.NVIC_IRQChannelCmd = ENABLE;
     	NVIC_Init(&nvicStructure);
 	
 	// Timebase configuration
-	timerInitStructure.TIM_Prescaler = prescaler;
+	timerInitStructure.TIM_Prescaler = scale;
 	timerInitStructure.TIM_CounterMode = TIM_CounterMode_Up;
 	timerInitStructure.TIM_Period = Period;
 	timerInitStructure.TIM_ClockDivision = TIM_CKD_DIV1;
@@ -422,11 +430,10 @@ void IntervalTimer::interrupt_SIT(action ACT)
 // Set new period for the SIT without
 // removing the SIT.
 // ------------------------------------------------------------
-void IntervalTimer::resetPeriod_SIT(intPeriod newPeriod, bool scale)
+void IntervalTimer::resetPeriodAndScale_SIT(intPeriod newPeriod, intPeriod scale)
 {
 	//TIM_TimeBaseInitTypeDef timerInitStructure;
 	TIM_TypeDef* TIMx;
-	intPeriod prescaler;
 
 	//use SIT_id to identify TIM#
 	switch (SIT_id) {
@@ -459,21 +466,8 @@ void IntervalTimer::resetPeriod_SIT(intPeriod newPeriod, bool scale)
 #endif
 	}
 
-	switch (scale) {
-	case uSec:
-		prescaler = SIT_PRESCALERu;	// Set prescaler for 1MHz clock, 1us period
-		break;
-	case hmSec:
-		prescaler = SIT_PRESCALERm;	// Set prescaler for 2Hz clock, .5ms period
-		break;
-	default:
-		scale = uSec;				// Default to microseconds
-		prescaler = SIT_PRESCALERu;
-		break;
-	}
-
 	TIMx->ARR = newPeriod;
-	TIMx->PSC = prescaler;
+	TIMx->PSC = scale;
 	TIMx->EGR = TIM_PSCReloadMode_Immediate;
 	TIM_ClearITPendingBit(TIMx, TIM_IT_Update);
 }

@@ -26,6 +26,8 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
 #define __INTERVALTIMER_H__
 
 #include "application.h"
+#include "stm32f2xx_rcc.h"
+#include "stm32f2xx_tim.h"
 
 
 #if defined(STM32F10X_MD) || !defined(PLATFORM_ID)		//Core
@@ -88,23 +90,31 @@ class IntervalTimer {
 	bool sysIntSetupDone = false;
 
 	// Timer ClockDivision = DIV4
-	const uint16_t SIT_PRESCALERu = (uint16_t)(SYSCORECLOCK / 1000000UL) - 1;	//To get TIM counter clock = 1MHz
-	const uint16_t SIT_PRESCALERm = (uint16_t)(SYSCORECLOCK / 2000UL) - 1;	//To get TIM counter clock = 2KHz
-    const uint16_t MAX_PERIOD = UINT16_MAX;		// 1-65535 us
+	static const uint16_t SIT_PRESCALERu = (uint16_t)(SYSCORECLOCK / 1000000UL) - 1;	//To get TIM counter clock = 1MHz
+	static const uint16_t SIT_PRESCALERm = (uint16_t)(SYSCORECLOCK / 2000UL) - 1;	//To get TIM counter clock = 2KHz
+    static const uint16_t MAX_PERIOD = UINT16_MAX;		// 1-65535 us
 
     static bool SIT_used[NUM_SIT];
-    bool allocate_SIT(intPeriod Period, bool scale, TIMid id);
-    void start_SIT(intPeriod Period, bool scale);
+
+    bool allocate_SIT(intPeriod Period, intPeriod scale, TIMid id);
+    void start_SIT(intPeriod Period, intPeriod scale);
     void stop_SIT();
     bool status;
     uint8_t SIT_id;
  	ISRcallback myISRcallback;
 
-    bool beginCycles(void (*isrCallback)(), intPeriod Period, bool scale, TIMid id);
+    uint8_t _preemptionPriority;
+    uint8_t _subpriority;
+
+    bool beginCycles(void (*isrCallback)(), intPeriod Period, intPeriod scale, TIMid id);
+
+    static bool boolToScale(bool scale) { return (scale == hmSec ? SIT_PRESCALERm : SIT_PRESCALERu); }
 
   public:
     IntervalTimer() {
 	status = TIMER_OFF;
+	_preemptionPriority = 10;
+	_subpriority = 1;
 
 	for (int i=0; i < NUM_SIT; i++)		//Set all SIT slots to unused
 		SIT_used[i] = false;
@@ -135,15 +145,22 @@ class IntervalTimer {
 
     }
 
+
     ~IntervalTimer() { end(); }
 
-    bool begin(void (*isrCallback)(), intPeriod Period, bool scale) {
-		if (Period < 10 || Period > MAX_PERIOD)
-			return false;
-		return beginCycles(isrCallback, Period, scale, AUTO);
+    //Start a timer using a period specified in seconds.
+    //TODO: not correct for periods longer than ~60 seconds (see implementation)
+    bool begin(void (*isrCallback)(), double Period, TIMid id = AUTO);
+
+    bool begin(void (*isrCallback)(), float Period) {
+    	return begin(isrCallback, (double)Period);
     }
 
-    bool begin(void (*isrCallback)(), intPeriod Period, bool scale, TIMid id) {
+    bool begin(void (*isrCallback)(), intPeriod Period, bool scale, TIMid id = AUTO) {
+    	return beginWithScale(isrCallback, Period, boolToScale(scale), id);
+    }
+
+    bool beginWithScale(void (*isrCallback)(), intPeriod Period, intPeriod scale, TIMid id = AUTO) {
 		if (Period < 10 || Period > MAX_PERIOD)
 			return false;
 		return beginCycles(isrCallback, Period, scale, id);
@@ -151,8 +168,13 @@ class IntervalTimer {
 
     void end();
 	void interrupt_SIT(action ACT);
-	void resetPeriod_SIT(intPeriod newPeriod, bool scale);
+	void resetPeriod_SIT(intPeriod newPeriod, bool scale) { resetPeriodAndScale_SIT(newPeriod, boolToScale(scale)); }
+	void resetPeriodAndScale_SIT(intPeriod newPeriod, intPeriod scale);
 	int8_t isAllocated_SIT(void);
+
+	//allow changing priority - note: priority/subpriority does not take effect until timer is started/reset
+ 	void preemptionPriority(uint8_t prio) { _preemptionPriority = prio; }
+ 	void subpriority(uint8_t prio) { _subpriority = prio; }
 
     static ISRcallback SIT_CALLBACK[NUM_SIT];
 };
