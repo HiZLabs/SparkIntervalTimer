@@ -122,27 +122,26 @@ void Wiring_TIM7_Interrupt_Handler_override()
 // or 1-65535 0.5ms increments (hmSec)
 // ------------------------------------------------------------
 bool IntervalTimer::beginCycles(void (*isrCallback)(), intPeriod Period, intPeriod scale, TIMid id) {
+	//Actual run time is CLK/((scale+1)(Period+1)), so subtract 1 from each
+	Period--;
+	scale--;
+	// if this interval timer is already running, stop and deallocate it
+	if (status == TIMER_SIT) {
+		stop_SIT();
+		status = TIMER_OFF;
+	}
+	// store callback pointer
+	myISRcallback = isrCallback;
 
-	ATOMIC_BLOCK()
-	{
-		// if this interval timer is already running, stop and deallocate it
-		if (status == TIMER_SIT) {
-			stop_SIT();
-			status = TIMER_OFF;
-		}
-		// store callback pointer
-		myISRcallback = isrCallback;
-
-		if (id < NUM_SIT) {		// Allocate specified timer (id=0 to 2/4) or auto-allocate from pool (id=255)
-			// attempt to allocate this timer
-			if (allocate_SIT(Period, scale, id)) status = TIMER_SIT;		//255 means allocate from pool
-			else status = TIMER_OFF;
-		}
-		else {
-			// attempt to allocate this timer
-			if (allocate_SIT(Period, scale, AUTO)) status = TIMER_SIT;		//255 means allocate from pool
-			else status = TIMER_OFF;
-		}
+	if (id < NUM_SIT) {		// Allocate specified timer (id=0 to 2/4) or auto-allocate from pool (id=255)
+		// attempt to allocate this timer
+		if (allocate_SIT(Period, scale, id)) status = TIMER_SIT;		//255 means allocate from pool
+		else status = TIMER_OFF;
+	}
+	else {
+		// attempt to allocate this timer
+		if (allocate_SIT(Period, scale, AUTO)) status = TIMER_SIT;		//255 means allocate from pool
+		else status = TIMER_OFF;
 	}
 
 	// check for success and return
@@ -168,8 +167,8 @@ bool IntervalTimer::begin(void (*isrCallback)(), double Period, TIMid id)
 
 	//split periodClocks into two factors not larger than 16 bits
 	//TODO: another factor could be used to set repetition counter
-	intPeriod factor0 = (uint16_t)(periodClocks % (UINT16_MAX+1));
-	intPeriod factor1 =  (uint16_t)(periodClocks / (factor0 == 0? (UINT16_MAX+1) : factor0));
+	intPeriod factor0 = (uint16_t)(periodClocks % (UINT16_MAX));
+	intPeriod factor1 =  (uint16_t)(periodClocks / (factor0 == 0? (UINT16_MAX) : factor0));
 	return beginWithScale(isrCallback, factor1, factor0, id);
 }
 
@@ -411,8 +410,8 @@ void IntervalTimer::interrupt_SIT(action ACT)
 	switch (ACT) {
 	case INT_ENABLE:
 		//Enable Timer Interrupt
-		nvicStructure.NVIC_IRQChannelPreemptionPriority = 0;
-		nvicStructure.NVIC_IRQChannelSubPriority = 1;
+		nvicStructure.NVIC_IRQChannelPreemptionPriority = _preemptionPriority;
+		nvicStructure.NVIC_IRQChannelSubPriority = _subpriority;
 		nvicStructure.NVIC_IRQChannelCmd = ENABLE;
 		NVIC_Init(&nvicStructure);
 		break;

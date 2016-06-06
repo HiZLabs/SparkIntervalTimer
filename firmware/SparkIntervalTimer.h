@@ -114,7 +114,7 @@ class IntervalTimer {
     IntervalTimer() {
 	status = TIMER_OFF;
 	_preemptionPriority = 10;
-	_subpriority = 1;
+	_subpriority = 0;
 
 	for (int i=0; i < NUM_SIT; i++)		//Set all SIT slots to unused
 		SIT_used[i] = false;
